@@ -27,18 +27,29 @@ def corner_alpha(alpha, border=6):
     }
 
 
-def looks_like_baked_checkerboard(rgb, band=0.02):
+def looks_like_baked_checkerboard(rgb, alpha=None, band=0.02, min_visible=0.2):
     """Detect a two-tone gray checkerboard painted into RGB.
 
-    Looks at the top and bottom strips, keeps them only if they are essentially
-    gray and dominated by two well-separated tones, then requires the tone to
-    actually alternate along a scanline. A real photo border rarely does all
-    three, which keeps the false-positive rate low.
+    Only *visible* pixels are considered. On a genuine cutout the border is
+    transparent, and the RGB stored under fully transparent pixels is arbitrary
+    leftover color — judging it would flag clean images. Looks at the top and
+    bottom strips, keeps them only if they are essentially gray and dominated by
+    two well-separated tones, then requires the tone to actually alternate along
+    a scanline. A real photo border rarely does all three, which keeps the
+    false-positive rate low.
     """
     h, w, _ = rgb.shape
     rows = max(1, int(h * band))
     strip = np.concatenate((rgb[:rows, :, :].reshape(-1, 3),
                             rgb[h - rows:, :, :].reshape(-1, 3)), axis=0)
+    if alpha is not None:
+        visible = np.concatenate((alpha[:rows, :].ravel(), alpha[h - rows:, :].ravel()),
+                                 axis=0) > 8
+        if visible.mean() < min_visible:
+            # The border is transparent, so there is no painted background here.
+            return False
+        strip = strip[visible]
+
     saturation = (strip.max(axis=1).astype(int) - strip.min(axis=1).astype(int))
     if saturation.mean() > 12:
         return False
@@ -54,9 +65,21 @@ def looks_like_baked_checkerboard(rgb, band=0.02):
     kept = counts[np.isin(values, [low, high])].sum() / counts.sum()
     if kept < 0.85:
         return False
-    line = rgb[0:max(1, rows // 2), :, :].mean(axis=(0, 2))
+
+    line_rgb = rgb[0:max(1, rows // 2), :, :]
+    if alpha is not None:
+        line_alpha = alpha[0:max(1, rows // 2), :]
+        weights = (line_alpha > 8)
+        counts = weights.sum(axis=0)
+        totals = (line_rgb.mean(axis=2) * weights).sum(axis=0)
+        line = np.where(counts > 0, totals / np.maximum(counts, 1), np.nan)
+        line = line[~np.isnan(line)]
+    else:
+        line = line_rgb.mean(axis=(0, 2))
+    if line.size < 8:
+        return False
     tones = (np.abs(line - low * 8) >= np.abs(line - high * 8)).astype(int)
-    toggles = int(np.abs(np.diff(tones)).sum()) if tones.size > 1 else 0
+    toggles = int(np.abs(np.diff(tones)).sum())
     return toggles >= 4
 
 
@@ -68,7 +91,7 @@ def analyze(rgba):
         "opaque": int((alpha >= 235).sum()),
         "soft": int(((alpha > 20) & (alpha < 235)).sum()),
         "transparent": int((alpha <= 20).sum()),
-        "checkerboard": bool(looks_like_baked_checkerboard(rgba[:, :, :3])),
+        "checkerboard": bool(looks_like_baked_checkerboard(rgba[:, :, :3], alpha)),
     }
     reasons = []
     if result["transparent"] == 0:

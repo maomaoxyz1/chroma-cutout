@@ -62,6 +62,19 @@ class AnalyzeTests(unittest.TestCase):
 
         self.assertFalse(alpha_check.looks_like_baked_checkerboard(rgb))
 
+    def test_transparent_border_with_leftover_rgb_is_not_flagged(self):
+        # Regression: on a real cutout the border is fully transparent and its
+        # RGB is arbitrary leftover color. Judging it produced a false FAIL.
+        rgb = checkerboard()
+        alpha = np.zeros((64, 64), dtype=np.uint8)
+        alpha[24:40, 24:40] = 255
+        rgba = np.dstack((rgb, alpha))
+
+        result = alpha_check.analyze(rgba)
+
+        self.assertFalse(result["checkerboard"])
+        self.assertTrue(result["ok"], result["reasons"])
+
     def test_photo_like_gray_border_is_not_a_checkerboard(self):
         rng = np.random.default_rng(7)
         rgb = rng.integers(90, 210, (64, 64, 3), dtype=np.uint8)
